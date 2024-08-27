@@ -64,7 +64,7 @@ func readBukkitSRG() {
 
 				bukkitSRG[oldClassName] = Class{
 					OldClass: oldClassName,
-					Import:   strings.ReplaceAll(strings.ReplaceAll(lineSplit[0], oldClassName, ""), "/", "."),
+					Import:   strings.ReplaceAll(strings.ReplaceAll(lineSplit[0], oldSplitSplit[len(oldSplitSplit)-1], ""), "/", "."),
 					Class:    className,
 				}
 			}
@@ -129,7 +129,7 @@ func processFiles() {
 			newCode = append(newCode, translateLine(line, toReplace))
 		}
 
-		file, err := os.Create(strings.ReplaceAll(craftbukkitFile.Path, "Old", "New"))
+		file, err := os.Create(strings.Replace(craftbukkitFile.Path, "Old", "New", 1))
 		if err != nil {
 			fmt.Println("Error creating the file:", err)
 			return
@@ -157,6 +157,8 @@ func getStaticClassesToReplace(lines []string) []string {
 			importWithoutImport := strings.ReplaceAll(line, "import ", "")
 			imports = append(imports, strings.ReplaceAll(importWithoutImport, ";", ""))
 		}
+
+		// TODO: Check inside code imports
 	}
 
 	return imports
@@ -169,6 +171,12 @@ func translateLine(line string, toReplace []string) string {
 		}
 
 		oldClassImportSplit := strings.Split(oldClassImport, ".")
+		doubleClassImport := bukkitSRG[oldClassImportSplit[len(oldClassImportSplit)-2]+"."+oldClassImportSplit[len(oldClassImportSplit)-1]]
+
+		if !unicode.IsUpper(rune(oldClassImportSplit[len(oldClassImportSplit)-2][0])) {
+			doubleClassImport = Class{}
+		}
+
 		oldClassName := oldClassImportSplit[len(oldClassImportSplit)-1]
 
 		class := bukkitSRG[oldClassName]
@@ -180,9 +188,21 @@ func translateLine(line string, toReplace []string) string {
 
 				if strings.HasPrefix(oldClassName, createWord(line, charNums)) {
 					if oldClassName == createWord(line, charNums) && checkBothBounds(line, charNums, class.Class, class.Import) {
-						line = replace(line, charNums, class.Class, class.Import)
-						charNums = []int{}
-						goto label
+						if !haveOtherImport(line, charNums[0]) {
+							isDouble, doubleClass := isDoubleClass(line, charNums[len(charNums)-1], class.OldClass)
+
+							if isDouble {
+								line = strings.ReplaceAll(line, doubleClass.OldClass, class.Import+doubleClass.Class)
+								charNums = []int{}
+								goto label
+							} else {
+								line = replace(line, charNums, class.Class, class.Import, doubleClassImport)
+								charNums = []int{}
+								goto label
+							}
+						} else {
+							charNums = []int{}
+						}
 					}
 				} else {
 					charNums = []int{}
@@ -194,9 +214,15 @@ func translateLine(line string, toReplace []string) string {
 	return line
 }
 
-func replace(str string, charNums []int, replace string, importOnly string) string {
+func replace(str string, charNums []int, replace string, importOnly string, doubleClass Class) string {
 	minimum := charNums[0]
 	maximum := charNums[len(charNums)-1]
+
+	isDoubleClassCheck := false
+	if doubleClass.Class != "" {
+		replace = doubleClass.Class
+		isDoubleClassCheck = true
+	}
 
 	var result string
 	for i := 0; i < len(str)+1; i++ {
@@ -204,6 +230,10 @@ func replace(str string, charNums []int, replace string, importOnly string) stri
 
 		} else {
 			if maximum+1 == i {
+				if isDoubleClassCheck {
+					importOnly = doubleClass.Import
+				}
+
 				if haveImport(str, charNums[0], importOnly) {
 					result += replace
 				} else {
@@ -259,6 +289,62 @@ func haveImport(str string, charNum int, importOnly string) bool {
 	}
 
 	return importOnly == resultStr
+}
+
+func isDoubleClass(str string, lastChar int, replace string) (bool, Class) {
+	if len(str)-1 <= lastChar {
+		return false, Class{}
+	}
+
+	var charNums []int
+	if string(str[lastChar+1]) == "." {
+		for i := lastChar + 2; i < len(str); i++ {
+			if unicode.IsLetter(rune(str[i])) {
+				charNums = append(charNums, i)
+			} else {
+				break
+			}
+		}
+	}
+
+	exits := bukkitSRG[replace+"."+createWord(str, charNums)]
+	if exits.Class != "" {
+		return true, exits
+	}
+
+	return false, Class{}
+
+}
+
+func haveOtherImport(str string, firstChar int) bool {
+	if firstChar == 0 {
+		return false
+	}
+
+	var charNums []int
+	if string(str[firstChar-1]) == "." {
+		for i := firstChar; i > 0; i-- {
+			if string(str[i]) == "." || unicode.IsLetter(rune(str[i])) {
+				charNums = append(charNums, i)
+			} else {
+				break
+			}
+		}
+	}
+
+	reverseArray(charNums)
+	if strings.HasPrefix(createWord(str, charNums), "org.bukkit") || strings.HasPrefix(createWord(str, charNums), "com.mojang") {
+		return true
+	}
+
+	return false
+}
+
+func reverseArray(arr []int) {
+	n := len(arr)
+	for i := 0; i < n/2; i++ {
+		arr[i], arr[n-i-1] = arr[n-i-1], arr[i]
+	}
 }
 
 func createWord(str string, charNums []int) string {
