@@ -180,11 +180,15 @@ func getStaticClassesToReplace(lines []string) ([]string, []Class) {
 }
 
 func translateLine(line string, toReplace []string, toCodeReplace []Class) string {
-	for _, oldClassImport := range toReplace {
-		if strings.Contains(line, "import") {
-			return line
-		}
+	if strings.Contains(line, "import") {
+		return line
+	}
 
+	for _, oldCodeClassImport := range toCodeReplace {
+		line = strings.ReplaceAll(line, oldCodeClassImport.Import+oldCodeClassImport.OldClass, oldCodeClassImport.Import+oldCodeClassImport.Class)
+	}
+
+	for _, oldClassImport := range toReplace {
 		oldClassImportSplit := strings.Split(oldClassImport, ".")
 		doubleClassImport := bukkitSRG[oldClassImportSplit[len(oldClassImportSplit)-2]+"."+oldClassImportSplit[len(oldClassImportSplit)-1]]
 
@@ -226,10 +230,6 @@ func translateLine(line string, toReplace []string, toCodeReplace []Class) strin
 				}
 			}
 		}
-	}
-
-	for _, oldCodeClassImport := range toCodeReplace {
-		line = strings.ReplaceAll(line, oldCodeClassImport.Import+oldCodeClassImport.OldClass, oldCodeClassImport.Import+oldCodeClassImport.Class)
 	}
 
 	return line
