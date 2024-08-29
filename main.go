@@ -127,7 +127,7 @@ func processFiles() {
 			log.Fatalln("MkdirAll error:", err)
 		}
 
-		imports, otherImports := getClassesToReplace(craftbukkitFile.Code)
+		imports, codeImports, otherImports := getClassesToReplace(craftbukkitFile.Code)
 
 		var newCode []string
 		for _, line := range craftbukkitFile.Code {
@@ -135,7 +135,7 @@ func processFiles() {
 				continue
 			}
 
-			newCode = append(newCode, translateLine(line, imports, otherImports))
+			newCode = append(newCode, translateLine(line, imports, codeImports, otherImports))
 		}
 
 		file, err := os.Create(strings.Replace(craftbukkitFile.Path, "Old", "New", 1))
@@ -158,8 +158,9 @@ func processFiles() {
 	}
 }
 
-func getClassesToReplace(lines []string) ([]Class, []string) {
+func getClassesToReplace(lines []string) ([]Class, []Class, []string) {
 	var imports []Class
+	var codeImports []Class
 	var otherImports []string
 
 	for _, line := range lines {
@@ -189,7 +190,7 @@ func getClassesToReplace(lines []string) ([]Class, []string) {
 		for _, class := range bukkitClassesSRG {
 			if strings.Contains(line, class.Import+class.OldClass) {
 				addImport := true
-				for _, importClass := range imports {
+				for _, importClass := range codeImports {
 					if importClass == class {
 						addImport = false
 						break
@@ -197,22 +198,35 @@ func getClassesToReplace(lines []string) ([]Class, []string) {
 				}
 
 				if addImport {
-					imports = append(imports, class)
+					codeImports = append(codeImports, class)
 				}
 			}
 		}
 	}
 
-	return imports, otherImports
+	return imports, codeImports, otherImports
 }
 
-func translateLine(line string, imports []Class, otherImports []string) string {
+func translateLine(line string, imports []Class, codeImports []Class, otherImports []string) string {
 	if strings.Contains(line, "import") {
 		return line
 	}
 
-	for _, class := range imports {
-		toReplace := class.OldClass
+	var allImports []Class
+
+	allImports = append(allImports, imports...)
+	allImports = append(allImports, codeImports...)
+
+	for _, class := range allImports {
+		toReplace := class.Import + class.OldClass
+
+		for _, normalImport := range imports {
+			if normalImport == class {
+				toReplace = normalImport.OldClass
+				break
+			}
+		}
+
 		toReplaceSplit := strings.Split(toReplace, ".")
 
 		if len(toReplaceSplit) == 2 {
@@ -240,7 +254,7 @@ func translateLine(line string, imports []Class, otherImports []string) string {
 				if isIt(line, charNums, str, class, otherImports) {
 					result, newChars := replace(line, charNums, class)
 					line = result
-					charRightNow += newChars
+					charRightNow = charNums[0] + newChars
 					charNums = []int{}
 					goto label
 				}
