@@ -12,8 +12,9 @@ import (
 )
 
 var (
-	bukkitSRG            = make(map[string]Class)
-	craftBukkitJavaFiles []File
+	bukkitClassesSRG       = make(map[string]Class)
+	bukkitDoubleClassesSRG = make(map[string]Class)
+	craftBukkitJavaFiles   []File
 )
 
 // Download it https://hub.spigotmc.org/stash/rest/api/latest/projects/SPIGOT/repos/craftbukkit/archive?format=zip
@@ -31,7 +32,7 @@ type File struct {
 
 func main() {
 	readBukkitSRG()
-	log.Println("Detected " + strconv.Itoa(len(bukkitSRG)) + " class names in the SRG.")
+	log.Println("Detected", len(bukkitClassesSRG), "class names and", len(bukkitDoubleClassesSRG), "double class names in the SRG.")
 	loadBukkitJavaFiles()
 	log.Println("Detected " + strconv.Itoa(len(craftBukkitJavaFiles)) + " OldCraftBukkit classes.")
 
@@ -62,10 +63,18 @@ func readBukkitSRG() {
 				splitSplit := strings.Split(lineSplit[1], "/")
 				className := strings.ReplaceAll(splitSplit[len(splitSplit)-1], "$", ".")
 
-				bukkitSRG[oldClassName] = Class{
-					OldClass: oldClassName,
-					Import:   strings.ReplaceAll(strings.ReplaceAll(lineSplit[0], oldSplitSplit[len(oldSplitSplit)-1], ""), "/", "."),
-					Class:    className,
+				if len(strings.Split(className, ".")) == 2 {
+					bukkitDoubleClassesSRG[oldClassName] = Class{
+						OldClass: oldClassName,
+						Import:   strings.ReplaceAll(strings.ReplaceAll(lineSplit[0], oldSplitSplit[len(oldSplitSplit)-1], ""), "/", "."),
+						Class:    className,
+					}
+				} else {
+					bukkitClassesSRG[oldClassName] = Class{
+						OldClass: oldClassName,
+						Import:   strings.ReplaceAll(strings.ReplaceAll(lineSplit[0], oldSplitSplit[len(oldSplitSplit)-1], ""), "/", "."),
+						Class:    className,
+					}
 				}
 			}
 		}
@@ -118,7 +127,7 @@ func processFiles() {
 			log.Fatalln("MkdirAll error:", err)
 		}
 
-		toReplace, toCodeReplace := getStaticClassesToReplace(craftbukkitFile.Code)
+		imports, otherImports := getClassesToReplace(craftbukkitFile.Code)
 
 		var newCode []string
 		for _, line := range craftbukkitFile.Code {
@@ -126,7 +135,7 @@ func processFiles() {
 				continue
 			}
 
-			newCode = append(newCode, translateLine(line, toReplace, toCodeReplace))
+			newCode = append(newCode, translateLine(line, imports, otherImports))
 		}
 
 		file, err := os.Create(strings.Replace(craftbukkitFile.Path, "Old", "New", 1))
@@ -149,20 +158,38 @@ func processFiles() {
 	}
 }
 
-func getStaticClassesToReplace(lines []string) ([]string, []Class) {
-	var imports []string
-	var codeImports []Class
+func getClassesToReplace(lines []string) ([]Class, []string) {
+	var imports []Class
+	var otherImports []string
 
 	for _, line := range lines {
 		if strings.Contains(line, "import") && strings.Contains(line, "net.minecraft") {
-			importWithoutImport := strings.ReplaceAll(line, "import ", "")
-			imports = append(imports, strings.ReplaceAll(importWithoutImport, ";", ""))
+			importWithoutImport := strings.ReplaceAll(strings.ReplaceAll(line, "import ", ""), ";", "")
+
+			importSplit := strings.Split(importWithoutImport, ".")
+			classImport := bukkitClassesSRG[importSplit[len(importSplit)-1]]
+			doubleClassImport := bukkitDoubleClassesSRG[importSplit[len(importSplit)-2]+"."+importSplit[len(importSplit)-1]]
+
+			if doubleClassImport.Class == "" {
+				imports = append(imports, classImport)
+			} else {
+				imports = append(imports, doubleClassImport)
+			}
+
+			continue
 		}
 
-		for _, class := range bukkitSRG {
+		if strings.Contains(line, "import") && !strings.Contains(line, "net.minecraft") {
+			importWithoutImport := strings.ReplaceAll(strings.ReplaceAll(line, "import ", ""), ";", "")
+			importSplit := strings.Split(importWithoutImport, ".")
+			otherImports = append(otherImports, importSplit[len(importSplit)-1])
+			continue
+		}
+
+		for _, class := range bukkitClassesSRG {
 			if strings.Contains(line, class.Import+class.OldClass) {
 				addImport := true
-				for _, importClass := range codeImports {
+				for _, importClass := range imports {
 					if importClass == class {
 						addImport = false
 						break
@@ -170,95 +197,89 @@ func getStaticClassesToReplace(lines []string) ([]string, []Class) {
 				}
 
 				if addImport {
-					codeImports = append(codeImports, class)
+					imports = append(imports, class)
 				}
 			}
 		}
 	}
 
-	return imports, codeImports
+	return imports, otherImports
 }
 
-func translateLine(line string, toReplace []string, toCodeReplace []Class) string {
+func translateLine(line string, imports []Class, otherImports []string) string {
 	if strings.Contains(line, "import") {
 		return line
 	}
 
-	for _, oldCodeClassImport := range toCodeReplace {
-		line = strings.ReplaceAll(line, oldCodeClassImport.Import+oldCodeClassImport.OldClass, oldCodeClassImport.Import+oldCodeClassImport.Class)
-	}
+	for _, class := range imports {
+		toReplace := class.OldClass
+		toReplaceSplit := strings.Split(toReplace, ".")
 
-	for _, oldClassImport := range toReplace {
-		oldClassImportSplit := strings.Split(oldClassImport, ".")
-		doubleClassImport := bukkitSRG[oldClassImportSplit[len(oldClassImportSplit)-2]+"."+oldClassImportSplit[len(oldClassImportSplit)-1]]
-
-		if !unicode.IsUpper(rune(oldClassImportSplit[len(oldClassImportSplit)-2][0])) {
-			doubleClassImport = Class{}
+		if len(toReplaceSplit) == 2 {
+			toReplace = toReplaceSplit[1]
 		}
 
-		oldClassName := oldClassImportSplit[len(oldClassImportSplit)-1]
+		if !strings.Contains(line, toReplace) {
+			continue
+		}
 
-		class := bukkitSRG[oldClassName]
-		if strings.Contains(line, class.OldClass) {
-			var charNums []int
-		label:
-			for char := range line {
-				charNums = append(charNums, char)
+		var charNums []int
+		charRightNow := 0
 
-				if strings.HasPrefix(oldClassName, createWord(line, charNums)) {
-					if oldClassName == createWord(line, charNums) && checkBothBounds(line, charNums, class.Class, class.Import) {
-						if !haveOtherImport(line, charNums[0]) {
-							isDouble, doubleClass := isDoubleClass(line, charNums[len(charNums)-1], class.OldClass)
+	label:
+		for char := charRightNow; char < len(line); char++ {
+			charNums = append(charNums, char)
 
-							if isDouble {
-								line = strings.ReplaceAll(line, doubleClass.OldClass, class.Import+doubleClass.Class)
-								charNums = []int{}
-								doubleClassImport = Class{}
-								goto label
-							} else {
-								line = replace(line, charNums, class.Class, class.Import, doubleClassImport)
-								charNums = []int{}
-								doubleClassImport = Class{}
-								goto label
-							}
-						} else {
-							charNums = []int{}
-						}
-					}
-				} else {
-					charNums = []int{}
+			str := createStr(line, charNums)
+
+			if strings.HasPrefix(toReplace, str) {
+				if str != toReplace {
+					continue
 				}
+
+				if isIt(line, charNums, str, class, otherImports) {
+					result, newChars := replace(line, charNums, class)
+					line = result
+					charRightNow += newChars
+					charNums = []int{}
+					goto label
+				}
+			} else {
+				charNums = []int{}
 			}
 		}
 	}
 
+	for _, class := range bukkitDoubleClassesSRG {
+		newClassSplit := strings.Split(class.Class, ".")
+		oldClassSplit := strings.Split(class.OldClass, ".")
+
+		line = strings.ReplaceAll(line, class.Import+newClassSplit[0]+"."+oldClassSplit[1], class.Import+newClassSplit[0]+"."+newClassSplit[1])
+	}
+
+	// Manual fixes
+	line = strings.ReplaceAll(line, "net.minecraft.world.net.minecraft.world.inventory.AbstractContainerMenu", "net.minecraft.world.inventory.AbstractContainerMenu")
+
 	return line
 }
 
-func replace(str string, charNums []int, replace string, importOnly string, doubleClass Class) string {
+func replace(str string, charNums []int, class Class) (string, int) {
 	minimum := charNums[0]
 	maximum := charNums[len(charNums)-1]
 
-	isDoubleClassCheck := false
-	if doubleClass.Class != "" {
-		replace = doubleClass.Class
-		isDoubleClassCheck = true
-	}
-
 	var result string
+	charsAdded := 0
 	for i := 0; i < len(str)+1; i++ {
 		if i >= minimum && i <= maximum {
 
 		} else {
 			if maximum+1 == i {
-				if isDoubleClassCheck {
-					importOnly = doubleClass.Import
-				}
-
-				if haveImport(str, charNums[0], importOnly) {
-					result += replace
+				if haveImport(str, charNums[0], class.Import) {
+					result += class.Class
+					charsAdded += len(class.Class)
 				} else {
-					result += importOnly + replace
+					result += class.Import + class.Class
+					charsAdded += len(class.Import + class.Class)
 				}
 			}
 
@@ -268,33 +289,44 @@ func replace(str string, charNums []int, replace string, importOnly string, doub
 		}
 	}
 
-	return result
+	return result, charsAdded
 }
 
-func checkBothBounds(str string, charNums []int, replace string, importOnly string) bool {
+func isIt(line string, charNums []int, str string, class Class, otherImports []string) bool {
 	resultAfter := false
+	resultBefore := false
+	isNotOther := true
 
-	if len(str)-1 <= charNums[len(charNums)-1] {
+	if len(line)-1 <= charNums[len(charNums)-1] {
 		resultAfter = true
 	} else {
-		if !unicode.IsLetter(rune(str[charNums[len(charNums)-1]+1])) {
+		if !unicode.IsLetter(rune(line[charNums[len(charNums)-1]+1])) {
 			resultAfter = true
 		}
 	}
 
-	resultBefore := false
-
 	if charNums[0] == 0 {
 		resultBefore = true
 	} else {
-		if !unicode.IsLetter(rune(str[charNums[0]-1])) {
-			if createWord(str, charNums) != replace || !haveImport(str, charNums[0], importOnly) {
-				resultBefore = true
+		if !unicode.IsLetter(rune(line[charNums[0]-1])) {
+			resultBefore = true
+		}
+	}
+
+	if !haveImport(line, charNums[0], class.Import) {
+		for _, other := range otherImports {
+			if str == other {
+				isNotOther = false
+				break
 			}
 		}
 	}
 
-	return resultAfter && resultBefore
+	if haveOtherImport(line, charNums[0]) {
+		isNotOther = false
+	}
+
+	return resultAfter && resultBefore && isNotOther
 }
 
 func haveImport(str string, charNum int, importOnly string) bool {
@@ -310,31 +342,6 @@ func haveImport(str string, charNum int, importOnly string) bool {
 	}
 
 	return importOnly == resultStr
-}
-
-func isDoubleClass(str string, lastChar int, replace string) (bool, Class) {
-	if len(str)-1 <= lastChar {
-		return false, Class{}
-	}
-
-	var charNums []int
-	if string(str[lastChar+1]) == "." {
-		for i := lastChar + 2; i < len(str); i++ {
-			if unicode.IsLetter(rune(str[i])) {
-				charNums = append(charNums, i)
-			} else {
-				break
-			}
-		}
-	}
-
-	exits := bukkitSRG[replace+"."+createWord(str, charNums)]
-	if exits.Class != "" {
-		return true, exits
-	}
-
-	return false, Class{}
-
 }
 
 func haveOtherImport(str string, firstChar int) bool {
@@ -354,7 +361,8 @@ func haveOtherImport(str string, firstChar int) bool {
 	}
 
 	reverseArray(charNums)
-	if strings.HasPrefix(createWord(str, charNums), "org.bukkit") || strings.HasPrefix(createWord(str, charNums), "com.mojang") {
+	createdStr := createStr(str, charNums)
+	if strings.HasPrefix(createdStr, "org.bukkit") || strings.HasPrefix(createdStr, "com.mojang") {
 		return true
 	}
 
@@ -368,7 +376,7 @@ func reverseArray(arr []int) {
 	}
 }
 
-func createWord(str string, charNums []int) string {
+func createStr(str string, charNums []int) string {
 	result := ""
 
 	for _, x := range charNums {
