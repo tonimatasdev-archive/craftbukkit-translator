@@ -1,8 +1,10 @@
 package main
 
 import (
+	"archive/zip"
 	"bufio"
-	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -16,8 +18,6 @@ var (
 	craftBukkitJavaFiles   []File
 )
 
-// Download it https://hub.spigotmc.org/stash/rest/api/latest/projects/SPIGOT/repos/craftbukkit/archive?format=zip
-
 type Class struct {
 	OldClass string
 	Import   string
@@ -30,11 +30,132 @@ type File struct {
 }
 
 func main() {
+	println("Downloading CraftBukkit...")
+	downloadNecessary()
+	println("CraftBukkit downloaded correctly.")
+	println("Unzipping CraftBukkit...")
+	unzipCraftBukkit()
+	println("CraftBukkit unzipped correctly.")
+	println("Preparing CraftBukkit...")
+	prepareCraftBukkit()
+	println("CraftBukkit prepared correctly.")
 	readBukkitSRG()
 	println("Detected", len(bukkitClassesSRG), "class names and", len(bukkitDoubleClassesSRG), "double class names in the SRG.")
 	loadBukkitJavaFiles()
 	println("Detected " + strconv.Itoa(len(craftBukkitJavaFiles)) + " OldCraftBukkit classes.")
 	processFiles()
+}
+
+func downloadNecessary() {
+	err := os.MkdirAll("OldCraftBukkit", os.ModePerm)
+	if err != nil {
+		panic(err)
+	}
+
+	file, err := os.Create("./OldCraftBukkit/CraftBukkit.zip")
+	if err != nil {
+		panic(err)
+	}
+	defer fileError(file)
+
+	resp, err := http.Get("https://hub.spigotmc.org/stash/rest/api/latest/projects/SPIGOT/repos/craftbukkit/archive?format=zip")
+	if err != nil {
+		panic(err)
+	}
+	defer resp.Body.Close()
+
+	_, err = io.Copy(file, resp.Body)
+
+	if err != nil {
+		panic(err)
+	}
+}
+
+func unzipCraftBukkit() {
+	src := "OldCraftBukkit/CraftBukkit.zip"
+	dest := "OldCraftBukkit/"
+
+	r, err := zip.OpenReader(src)
+	if err != nil {
+		panic(err)
+	}
+	defer func(r *zip.ReadCloser) {
+		err := r.Close()
+
+		if err != nil {
+			panic(err)
+		}
+	}(r)
+
+	for _, f := range r.File {
+		fpath := filepath.Join(dest, f.Name)
+		if !strings.HasPrefix(fpath, filepath.Clean(dest)+string(os.PathSeparator)) {
+
+			panic("illegal file path: " + fpath)
+		}
+
+		if f.FileInfo().IsDir() {
+			err := os.MkdirAll(fpath, os.ModePerm)
+
+			if err != nil {
+				panic(err)
+			}
+
+			continue
+		}
+
+		if err := os.MkdirAll(filepath.Dir(fpath), os.ModePerm); err != nil {
+			panic(err)
+		}
+
+		outFile, err := os.OpenFile(fpath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, f.Mode())
+
+		if err != nil {
+			panic(err)
+		}
+
+		rc, err := f.Open()
+
+		if err != nil {
+			panic(err)
+		}
+
+		_, err = io.Copy(outFile, rc)
+
+		if err != nil {
+			panic(err)
+		}
+
+		fileError(outFile)
+		err = rc.Close()
+
+		if err != nil {
+			panic(err)
+		}
+	}
+}
+
+func prepareCraftBukkit() {
+	entries, err := os.ReadDir("OldCraftBukkit/")
+	if err != nil {
+		panic(err)
+	}
+
+	toDelete := []string{"OldCraftBukkit/src/assembly", "OldCraftBukkit/src/main/resources", "OldCraftBukkit/src/test",
+		"OldCraftBukkit/nms-patches"}
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			toDelete = append(toDelete, "OldCraftBukkit/"+entry.Name())
+		}
+	}
+
+	for _, path := range toDelete {
+		err := os.RemoveAll(path)
+		if err != nil {
+			panic(err)
+		}
+	}
 }
 
 func readBukkitSRG() {
@@ -79,7 +200,7 @@ func readBukkitSRG() {
 	}
 
 	if err := scanner.Err(); err != nil {
-		stopError("Error reading a file: " + err.Error())
+		panic(err)
 	}
 }
 
@@ -87,14 +208,14 @@ func loadBukkitJavaFiles() {
 	err := filepath.WalkDir("OldCraftBukkit", func(path string, d os.DirEntry, err error) error {
 
 		if err != nil {
-			stopError("Error walking a dir.")
+			panic(err)
 		}
 
 		if !d.IsDir() && strings.HasSuffix(d.Name(), ".java") {
 			file, err := os.Open(path)
 
 			if err != nil {
-				stopError("Error opening a file.")
+				panic(err)
 			}
 
 			scanner := bufio.NewScanner(file)
@@ -115,17 +236,16 @@ func loadBukkitJavaFiles() {
 	})
 
 	if err != nil {
-		fmt.Println("Error:", err)
-		return
+		panic(err)
 	}
 }
 
 func processFiles() {
 	for x, craftBukkitFile := range craftBukkitJavaFiles {
-		err := os.MkdirAll(strings.ReplaceAll(filepath.Dir(craftBukkitFile.Path), "Old", "New"), 0777)
+		err := os.MkdirAll(strings.ReplaceAll(filepath.Dir(craftBukkitFile.Path), "Old", "New"), os.ModePerm)
 
 		if err != nil {
-			stopError("Error creating folders.")
+			panic(err)
 		}
 
 		imports, codeImports, otherImports := getClassesToReplace(craftBukkitFile.Code)
@@ -141,15 +261,13 @@ func processFiles() {
 
 		file, err := os.Create(strings.Replace(craftBukkitFile.Path, "Old", "New", 1))
 		if err != nil {
-			stopError("Error creating the file.")
-			return
+			panic(err)
 		}
 
 		for _, line := range newCode {
 			_, err := file.WriteString(line + "\n")
 			if err != nil {
-				stopError("Error writing in the file.")
-				return
+				panic(err)
 			}
 		}
 
@@ -415,14 +533,9 @@ func createStr(str string, charNums []int) string {
 	return result
 }
 
-func stopError(message string) {
-	println(message)
-	os.Exit(1)
-}
-
 func fileError(file *os.File) {
 	err := file.Close()
 	if err != nil {
-		stopError("Error closing file: " + err.Error())
+		panic(err)
 	}
 }
