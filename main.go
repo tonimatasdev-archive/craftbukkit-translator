@@ -240,7 +240,7 @@ func translateLine(line string, imports []Class, codeImports []Class, otherImpor
 		var charNums []int
 		charRightNow := 0
 
-	label:
+	continueWithLine:
 		for char := charRightNow; char < len(line); char++ {
 			charNums = append(charNums, char)
 
@@ -256,7 +256,7 @@ func translateLine(line string, imports []Class, codeImports []Class, otherImpor
 					line = result
 					charRightNow = charNums[0] + newChars
 					charNums = []int{}
-					goto label
+					goto continueWithLine
 				}
 			} else {
 				charNums = []int{}
@@ -268,7 +268,21 @@ func translateLine(line string, imports []Class, codeImports []Class, otherImpor
 		newClassSplit := strings.Split(class.Class, ".")
 		oldClassSplit := strings.Split(class.OldClass, ".")
 
-		line = strings.ReplaceAll(line, class.Import+newClassSplit[0]+"."+oldClassSplit[1], class.Import+newClassSplit[0]+"."+newClassSplit[1])
+		charRightNow := -1
+	next:
+		if strings.Index(line, class.Import+newClassSplit[0]+"."+oldClassSplit[1]) > charRightNow {
+			first := strings.Index(line, class.Import+newClassSplit[0]+"."+oldClassSplit[1])
+			last := first + len(class.Import+newClassSplit[0]+"."+oldClassSplit[1]) - 1
+
+			charNums := []int{first, last}
+
+			if !unicode.IsLetter(rune(line[last+1])) {
+				result, newChars := replace(line, charNums, class)
+				line = result
+				charRightNow = charNums[0] + newChars
+				goto next
+			}
+		}
 	}
 
 	// Manual fixes
