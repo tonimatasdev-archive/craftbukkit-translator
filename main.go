@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -32,10 +31,9 @@ type File struct {
 
 func main() {
 	readBukkitSRG()
-	log.Println("Detected", len(bukkitClassesSRG), "class names and", len(bukkitDoubleClassesSRG), "double class names in the SRG.")
+	println("Detected", len(bukkitClassesSRG), "class names and", len(bukkitDoubleClassesSRG), "double class names in the SRG.")
 	loadBukkitJavaFiles()
-	log.Println("Detected " + strconv.Itoa(len(craftBukkitJavaFiles)) + " OldCraftBukkit classes.")
-
+	println("Detected " + strconv.Itoa(len(craftBukkitJavaFiles)) + " OldCraftBukkit classes.")
 	processFiles()
 }
 
@@ -43,10 +41,10 @@ func readBukkitSRG() {
 	file, err := os.Open("bukkit_srg.srg")
 
 	if err != nil {
-		log.Fatalln("Open file error:", err)
+		println("Open file error:", err)
 	}
 
-	defer file.Close()
+	defer fileError(file)
 
 	scanner := bufio.NewScanner(file)
 
@@ -81,20 +79,22 @@ func readBukkitSRG() {
 	}
 
 	if err := scanner.Err(); err != nil {
-		log.Fatalln("Error durante la lectura del archivo:", err)
+		stopError("Error reading a file: " + err.Error())
 	}
 }
 
 func loadBukkitJavaFiles() {
 	err := filepath.WalkDir("OldCraftBukkit", func(path string, d os.DirEntry, err error) error {
+
 		if err != nil {
-			return err
+			stopError("Error walking a dir.")
 		}
+
 		if !d.IsDir() && strings.HasSuffix(d.Name(), ".java") {
 			file, err := os.Open(path)
 
 			if err != nil {
-				log.Fatalln("Open file error:", err)
+				stopError("Error opening a file.")
 			}
 
 			scanner := bufio.NewScanner(file)
@@ -108,7 +108,8 @@ func loadBukkitJavaFiles() {
 				Code: lines,
 				Path: path,
 			})
-			file.Close()
+
+			fileError(file)
 		}
 		return nil
 	})
@@ -120,17 +121,17 @@ func loadBukkitJavaFiles() {
 }
 
 func processFiles() {
-	for x, craftbukkitFile := range craftBukkitJavaFiles {
-		err := os.MkdirAll(strings.ReplaceAll(filepath.Dir(craftbukkitFile.Path), "Old", "New"), 0777)
+	for x, craftBukkitFile := range craftBukkitJavaFiles {
+		err := os.MkdirAll(strings.ReplaceAll(filepath.Dir(craftBukkitFile.Path), "Old", "New"), 0777)
 
 		if err != nil {
-			log.Fatalln("MkdirAll error:", err)
+			stopError("Error creating folders.")
 		}
 
-		imports, codeImports, otherImports := getClassesToReplace(craftbukkitFile.Code)
+		imports, codeImports, otherImports := getClassesToReplace(craftBukkitFile.Code)
 
 		var newCode []string
-		for _, line := range craftbukkitFile.Code {
+		for _, line := range craftBukkitFile.Code {
 			if strings.Contains(line, "import net.minecraft") {
 				continue
 			}
@@ -138,23 +139,23 @@ func processFiles() {
 			newCode = append(newCode, translateLine(line, imports, codeImports, otherImports))
 		}
 
-		file, err := os.Create(strings.Replace(craftbukkitFile.Path, "Old", "New", 1))
+		file, err := os.Create(strings.Replace(craftBukkitFile.Path, "Old", "New", 1))
 		if err != nil {
-			fmt.Println("Error creating the file:", err)
+			stopError("Error creating the file.")
 			return
 		}
 
 		for _, line := range newCode {
 			_, err := file.WriteString(line + "\n")
 			if err != nil {
-				fmt.Println("Error writing in the file:", err)
+				stopError("Error writing in the file.")
 				return
 			}
 		}
 
-		file.Close()
+		fileError(file)
 
-		log.Println("[" + strconv.Itoa(x+1) + "/" + strconv.Itoa(len(craftBukkitJavaFiles)) + "] " + file.Name())
+		println("[" + strconv.Itoa(x+1) + "/" + strconv.Itoa(len(craftBukkitJavaFiles)) + "] " + file.Name())
 	}
 }
 
@@ -412,4 +413,16 @@ func createStr(str string, charNums []int) string {
 	}
 
 	return result
+}
+
+func stopError(message string) {
+	println(message)
+	os.Exit(1)
+}
+
+func fileError(file *os.File) {
+	err := file.Close()
+	if err != nil {
+		stopError("Error closing file: " + err.Error())
+	}
 }
