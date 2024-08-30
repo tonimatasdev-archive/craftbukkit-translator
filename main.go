@@ -62,7 +62,12 @@ func downloadNecessary() {
 	if err != nil {
 		panic(err)
 	}
-	defer resp.Body.Close()
+	defer func(Body io.ReadCloser) {
+		err := Body.Close()
+		if err != nil {
+			panic(err)
+		}
+	}(resp.Body)
 
 	_, err = io.Copy(file, resp.Body)
 
